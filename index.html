@@ -3,30 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YouTube Video mit Autoplay</title>
-    <style>
-        /* schön mittig der müll */
-        body {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background-color: #f0f0f0;
-        }
-        iframe {
-            border: none;
-        }
-    </style>
+    <title>Autoplay MP3</title>
 </head>
 <body>
-    <!-- autoplay für extra nervig-Effekt -->
-    <iframe width="560" height="315" 
-        src="https://www.youtube.com/embed/mz3tnaCh5aQ?autoplay=1&mute=1"
-        title="YouTube video player" 
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
-        referrerpolicy="strict-origin-when-cross-origin" 
-        allowfullscreen>
-    </iframe>
+    <!-- Autoplay MP3-Datei -->
+    <audio autoplay>
+        <source src="https://www.myinstants.com/media/sounds/retard-waaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp3" type="audio/mpeg">
+        Dein Browser unterstützt das Audio-Element nicht.
+    </audio>
 </body>
 </html>
