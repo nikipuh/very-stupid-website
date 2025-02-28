@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>World of Tanks Blitz Battle Analyzer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css">
+    <style>
+        .drop-zone {
+            border: 2px dashed #ccc;
+            border-radius: 20px;
+            width: 100%;
+            padding: 20px;
+            text-align: center;
+            transition: border 0.3s ease;
+        }
+        .drop-zone.active {
+            border: 2px dashed #007bff;
+        }
+        .progress-container {
+            width: 100%;
+            background-color: #f3f3f3;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+        .progress-bar {
+            height: 10px;
+            background-color: #4CAF50;
+            border-radius: 8px;
+            width: 0%;
+            transition: width 0.3s;
+        }
+        #screenshot-preview {
+            max-width: 100%;
+            max-height: 500px;
+            margin: 20px auto;
+            display: none;
+        }
+        .player-card {
+            margin-bottom: 10px;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .team-allies {
+            background-color: rgba(0, 123, 255, 0.1);
+            border-left: 4px solid #007bff;
+        }
+        .team-enemies {
+            background-color: rgba(220, 53, 69, 0.1);
+            border-left: 4px solid #dc3545;
+        }
+        .winrate-high {
+            color: #28a745;
+            font-weight: bold;
+        }
+        .winrate-medium {
+            color: #ffc107;
+        }
+        .winrate-low {
+            color: #dc3545;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <header class="text-center mb-10">
+            <h1 class="text-3xl font-bold text-gray-800">World of Tanks Blitz Battle Analyzer</h1>
+            <p class="text-gray-600 mt-2">Upload your battle screenshot to analyze player statistics</p>
+        </header>
+        
+        <div class="bg-white shadow-md rounded-lg p-6 mb-6">
+            <div id="drop-zone" class="drop-zone">
+                <div class="text-gray-500">
+                    <p class="text-lg mb-2">Drop your screenshot here or click to browse</p>
+                    <p class="text-sm">Supported formats: PNG, JPG</p>
+                </div>
+                <input type="file" id="file-input" accept="image/*" class="hidden">
+            </div>
+            
+            <div id="progress-container" class="progress-container" style="display: none;">
+                <div id="progress-bar" class="progress-bar"></div>
+                <p id="progress-text" class="text-center text-sm text-gray-600 mt-1">Processing...</p>
+            </div>
+            
+            <img id="screenshot-preview" class="rounded-lg shadow-sm">
+        </div>
+        
+        <div id="results-container" class="grid grid-cols-1 md:grid-cols-2 gap-6" style="display: none;">
+            <div class="bg-white shadow-md rounded-lg p-6">
+                <h2 class="text-xl font-bold text-blue-600 mb-4">Allied Team</h2>
+                <div id="allies-stats" class="space-y-2"></div>
+                <div id="allies-summary" class="mt-6 pt-4 border-t border-gray-200"></div>
+            </div>
+            
+            <div class="bg-white shadow-md rounded-lg p-6">
+                <h2 class="text-xl font-bold text-red-600 mb-4">Enemy Team</h2>
+                <div id="enemies-stats" class="space-y-2"></div>
+                <div id="enemies-summary" class="mt-6 pt-4 border-t border-gray-200"></div>
+            </div>
+            
+            <div class="bg-white shadow-md rounded-lg p-6 md:col-span-2">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Team Comparison</h2>
+                <canvas id="winrate-chart" height="100"></canvas>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_KEY = 'bd877d19a45983daba697ebbaf3cff22'; // Wargaming API key
+        const BASE_URL = 'https://api.wotblitz.eu/wotb/';
+        
+        // Elements
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const progressContainer = document.getElementById('progress-container');
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const screenshotPreview = document.getElementById('screenshot-preview');
+        const resultsContainer = document.getElementById('results-container');
+        const alliesStats = document.getElementById('allies-stats');
+        const enemiesStats = document.getElementById('enemies-stats');
+        const alliesSummary = document.getElementById('allies-summary');
+        const enemiesSummary = document.getElementById('enemies-summary');
+        
+        // Initialize Tesseract
+        const worker = Tesseract.createWorker();
+        
+        // Set up event listeners
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('active');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('active');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('active');
+            
+            if (e.dataTransfer.files.length) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) {
+                handleFile(fileInput.files[0]);
+            }
+        });
+        
+        async function handleFile(file) {
+            if (!file.type.match('image.*')) {
+                alert('Please upload an image file');
+                return;
+            }
+            
+            // Display preview
+            screenshotPreview.src = URL.createObjectURL(file);
+            screenshotPreview.style.display = 'block';
+            
+            // Reset results
+            resultsContainer.style.display = 'none';
+            alliesStats.innerHTML = '';
+            enemiesStats.innerHTML = '';
+            alliesSummary.innerHTML = '';
+            enemiesSummary.innerHTML = '';
+            
+            // Show progress
+            progressContainer.style.display = 'block';
+            updateProgress(5, 'Initializing OCR...');
+            
+            try {
+                // Initialize worker
+                await worker.load();
+                await worker.loadLanguage('eng');
+                await worker.initialize('eng');
+                updateProgress(20, 'OCR engine ready');
+                
+                // Process the image
+                await processImage(file);
+                
+                // Terminate worker
+                await worker.terminate();
+            } catch (error) {
+                console.error('Error:', error);
+                updateProgress(100, 'Error: ' + error.message);
+            }
+        }
+        
+        async function processImage(file) {
+            updateProgress(30, 'Reading player names...');
+            
+            // Create an image element to get dimensions
+            const img = new Image();
+            img.src = URL.createObjectURL(file);
+            
+            await new Promise(resolve => {
+                img.onload = resolve;
+            });
+            
+            // Define regions for player names
+            // These coordinates need to be adjusted based on your screenshots
+            const width = img.width;
+            const height = img.height;
+            
+            // Approximate regions based on the screenshot
+            const allyRegion = {
+                left: width * 0.32,
+                top: height * 0.24,
+                width: width * 0.12,
+                height: height * 0.25
+            };
+            
+            const enemyRegion = {
+                left: width * 0.75,
+                top: height * 0.24,
+                width: width * 0.12,
+                height: height * 0.25
+            };
+            
+            const allyTankRegion = {
+                left: width * 0.55,
+                top: height * 0.24,
+                width: width * 0.1,
+                height: height * 0.25
+            };
+            
+            const enemyTankRegion = {
+                left: width * 0.65,
+                top: height * 0.24,
+                width: width * 0.1,
+                height: height * 0.25
+            };
+            
+            // Create canvas to crop image
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Extract ally player names
+            updateProgress(40, 'Recognizing ally players...');
+            canvas.width = allyRegion.width;
+            canvas.height = allyRegion.height;
+            ctx.drawImage(img, allyRegion.left, allyRegion.top, allyRegion.width, allyRegion.height, 
+                         0, 0, allyRegion.width, allyRegion.height);
+            const allyPlayersResult = await worker.recognize(canvas.toDataURL());
+            const allyPlayers = parsePlayerNames(allyPlayersResult.data.text);
+            
+            // Extract enemy player names
+            updateProgress(50, 'Recognizing enemy players...');
+            canvas.width = enemyRegion.width;
+            canvas.height = enemyRegion.height;
+            ctx.drawImage(img, enemyRegion.left, enemyRegion.top, enemyRegion.width, enemyRegion.height, 
+                         0, 0, enemyRegion.width, enemyRegion.height);
+            const enemyPlayersResult = await worker.recognize(canvas.toDataURL());
+            const enemyPlayers = parsePlayerNames(enemyPlayersResult.data.text);
+            
+            // Extract ally tanks
+            updateProgress(60, 'Recognizing ally tanks...');
+            canvas.width = allyTankRegion.width;
+            canvas.height = allyTankRegion.height;
+            ctx.drawImage(img, allyTankRegion.left, allyTankRegion.top, allyTankRegion.width, allyTankRegion.height, 
+                         0, 0, allyTankRegion.width, allyTankRegion.height);
+            const allyTanksResult = await worker.recognize(canvas.toDataURL());
+            const allyTanks = parsePlayerNames(allyTanksResult.data.text);
+            
+            // Extract enemy tanks
+            updateProgress(70, 'Recognizing enemy tanks...');
+            canvas.width = enemyTankRegion.width;
+            canvas.height = enemyTankRegion.height;
+            ctx.drawImage(img, enemyTankRegion.left, enemyTankRegion.top, enemyTankRegion.width, enemyTankRegion.height, 
+                         0, 0, enemyTankRegion.width, enemyTankRegion.height);
+            const enemyTanksResult = await worker.recognize(canvas.toDataURL());
+            const enemyTanks = parsePlayerNames(enemyTanksResult.data.text);
+            
+            // Combine data
+            const playerData = [];
+            for (let i = 0; i < allyPlayers.length; i++) {
+                if (allyPlayers[i]) {
+                    playerData.push({
+                        name: allyPlayers[i],
+                        tank: i < allyTanks.length ? allyTanks[i] : 'Unknown',
+                        team: 'Ally'
+                    });
+                }
+            }
+            
+            for (let i = 0; i < enemyPlayers.length; i++) {
+                if (enemyPlayers[i]) {
+                    playerData.push({
+                        name: enemyPlayers[i],
+                        tank: i < enemyTanks.length ? enemyTanks[i] : 'Unknown',
+                        team: 'Enemy'
+                    });
+                }
+            }
+            
+            // Fetch player stats
+            updateProgress(80, 'Fetching player statistics...');
+            await getPlayerStats(playerData);
+        }
+        
+        function parsePlayerNames(text) {
+            // Split by new lines and filter out empty strings
+            return text.split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0);
+        }
+        
+        async function getPlayerStats(playerData) {
+            updateProgress(85, 'Processing player data...');
+            
+            const allPlayers = [];
+            let processedCount = 0;
+            
+            // Process each player
+            for (const player of playerData) {
+                processedCount++;
+                updateProgress(85 + (processedCount / playerData.length) * 10, 
+                              `Fetching stats for ${player.name}...`);
+                
+                let playerName = player.name;
+                // Clean player name (remove clan tags if present)
+                if (playerName.includes('[') && playerName.includes(']')) {
+                    const start = playerName.indexOf('[');
+                    const end = playerName.indexOf(']') + 1;
+                    playerName = playerName.replace(playerName.substring(start, end), '').trim();
+                }
+                
+                try {
+                    // Get account ID
+                    const accountId = await getAccountId(playerName);
+                    if (!accountId) {
+                        allPlayers.push({
+                            ...player,
+                            winrate: 'Not found',
+                            accountId: null
+                        });
+                        continue;
+                    }
+                    
+                    // Get player stats
+                    const stats = await getAccountStats(accountId);
+                    if (stats) {
+                        const wins = stats.wins;
+                        const losses = stats.losses;
+                        const totalBattles = wins + losses;
+                        const winrate = totalBattles > 0 ? (wins / totalBattles * 100).toFixed(2) : 0;
+                        
+                        allPlayers.push({
+                            ...player,
+                            winrate: `${winrate}%`,
+                            winrateValue: parseFloat(winrate),
+                            accountId: accountId,
+                            battles: totalBattles
+                        });
+                    } else {
+                        allPlayers.push({
+                            ...player,
+                            winrate: 'No stats',
+                            accountId: accountId
+                        });
+                    }
+                } catch (error) {
+                    console.error(`Error processing ${playerName}:`, error);
+                    allPlayers.push({
+                        ...player,
+                        winrate: 'Error',
+                        accountId: null
+                    });
+                }
+            }
+            
+            // Display results
+            displayResults(allPlayers);
+        }
+        
+        async function getAccountId(playerName) {
+            try {
+                const url = `${BASE_URL}account/list/?application_id=${API_KEY}&search=${encodeURIComponent(playerName)}&limit=1&type=exact&fields=account_id`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.status === 'ok' && data.data && data.data.length > 0) {
+                    return data.data[0].account_id;
+                }
+                return null;
+            } catch (error) {
+                console.error('Error getting account ID:', error);
+                return null;
+            }
+        }
+        
+        async function getAccountStats(accountId) {
+            try {
+                const url = `${BASE_URL}account/info/?application_id=${API_KEY}&account_id=${accountId}&fields=statistics.all.wins%2Cstatistics.all.losses`;
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                if (data.status === 'ok' && data.data && data.data[accountId]) {
+                    const accountData = data.data[accountId];
+                    if (accountData.statistics && accountData.statistics.all) {
+                        return {
+                            wins: accountData.statistics.all.wins,
+                            losses: accountData.statistics.all.losses
+                        };
+                    }
+                }
+                return null;
+            } catch (error) {
+                console.error('Error getting account stats:', error);
+                return null;
+            }
+        }
+        
+        function displayResults(players) {
+            updateProgress(100, 'Analysis complete!');
+            
+            // Split into teams
+            const allies = players.filter(p => p.team === 'Ally');
+            const enemies = players.filter(p => p.team === 'Enemy');
+            
+            // Display player cards
+            allies.forEach(player => {
+                alliesStats.appendChild(createPlayerCard(player));
+            });
+            
+            enemies.forEach(player => {
+                enemiesStats.appendChild(createPlayerCard(player));
+            });
+            
+            // Calculate team averages
+            const allyWinrates = allies
+                .filter(p => !isNaN(p.winrateValue))
+                .map(p => p.winrateValue);
+            
+            const enemyWinrates = enemies
+                .filter(p => !isNaN(p.winrateValue))
+                .map(p => p.winrateValue);
+            
+            const allyAvg = allyWinrates.length > 0 
+                ? allyWinrates.reduce((a, b) => a + b, 0) / allyWinrates.length 
+                : 0;
+            
+            const enemyAvg = enemyWinrates.length > 0 
+                ? enemyWinrates.reduce((a, b) => a + b, 0) / enemyWinrates.length 
+                : 0;
+            
+            // Display summaries
+            alliesSummary.innerHTML = `
+                <div class="flex justify-between items-center">
+                    <span class="font-semibold">Team Average:</span>
+                    <span class="${getWinrateClass(allyAvg)}">${allyAvg.toFixed(2)}%</span>
+                </div>
+                <div class="flex justify-between items-center mt-1">
+                    <span class="font-semibold">Players Found:</span>
+                    <span>${allyWinrates.length}/${allies.length}</span>
+                </div>
+            `;
+            
+            enemiesSummary.innerHTML = `
+                <div class="flex justify-between items-center">
+                    <span class="font-semibold">Team Average:</span>
+                    <span class="${getWinrateClass(enemyAvg)}">${enemyAvg.toFixed(2)}%</span>
+                </div>
+                <div class="flex justify-between items-center mt-1">
+                    <span class="font-semibold">Players Found:</span>
+                    <span>${enemyWinrates.length}/${enemies.length}</span>
+                </div>
+            `;
+            
+            // Create comparison chart
+            createWinrateChart(allyAvg, enemyAvg);
+            
+            // Show results
+            resultsContainer.style.display = 'grid';
+            progressContainer.style.display = 'none';
+        }
+        
+        function createPlayerCard(player) {
+            const card = document.createElement('div');
+            card.className = `player-card p-3 team-${player.team.toLowerCase()}`;
+            
+            let winrateClass = '';
+            if (!isNaN(player.winrateValue)) {
+                winrateClass = getWinrateClass(player.winrateValue);
+            }
+            
+            card.innerHTML = `
+                <div class="flex justify-between items-center">
+                    <div>
+                        <h3 class="font-medium">${player.name}</h3>
+                        <p class="text-sm text-gray-600">${player.tank}</p>
+                    </div>
+                    <div class="text-right">
+                        <p class="text-sm ${winrateClass}">${player.winrate}</p>
+                        ${player.battles ? `<p class="text-xs text-gray-500">${player.battles} battles</p>` : ''}
+                    </div>
+                </div>
+            `;
+            
+            return card;
+        }
+        
+        function getWinrateClass(winrate) {
+            if (winrate >= 55) return 'winrate-high';
+            if (winrate >= 48) return 'winrate-medium';
+            return 'winrate-low';
+        }
+        
+        function createWinrateChart(allyAvg, enemyAvg) {
+            const ctx = document.getElementById('winrate-chart').getContext('2d');
+            
+            // Destroy existing chart if it exists
+            if (window.winrateChart) {
+                window.winrateChart.destroy();
+            }
+            
+            window.winrateChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Team Average Winrate'],
+                    datasets: [
+                        {
+                            label: 'Allies',
+                            data: [allyAvg],
+                            backgroundColor: 'rgba(0, 123, 255, 0.7)',
+                            borderColor: 'rgba(0, 123, 255, 1)',
+                            borderWidth: 1
+                        },
+                        {
+                            label: 'Enemies',
+                            data: [enemyAvg],
+                            backgroundColor: 'rgba(220, 53, 69, 0.7)',
+                            borderColor: 'rgba(220, 53, 69, 1)',
+                            borderWidth: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            min: Math.min(40, Math.floor(Math.min(allyAvg, enemyAvg) - 5)),
+                            max: Math.max(60, Math.ceil(Math.max(allyAvg, enemyAvg) + 5)),
+                            title: {
+                                display: true,
+                                text: 'Winrate %'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `${context.dataset.label}: ${context.raw.toFixed(2)}%`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        function updateProgress(percent, message) {
+            progressBar.style.width = `${percent}%`;
+            progressText.textContent = message;
+        }
+    </script>
+    
+    <footer class="text-center py-6 text-gray-600 text-sm">
+        <p>World of Tanks Blitz Battle Analyzer | Not affiliated with Wargaming.net</p>
+        <p class="mt-2">Powered by Tesseract.js for OCR and Wargaming API</p>
+    </footer>
+</body>
+</html>
